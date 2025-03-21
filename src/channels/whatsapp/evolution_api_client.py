@@ -76,22 +76,22 @@ class EvolutionAPIClient:
         try:
             # Close existing connection if any
             if self.connection and self.connection.is_open:
+                logger.debug("Closing existing connection")
                 self.connection.close()
             
-            # Create connection parameters with heartbeat and retries
-            params = pika.URLParameters(self.config.uri)
-            params.heartbeat = self.config.heartbeat
-            params.connection_attempts = self.config.connection_attempts
-            params.retry_delay = self.config.retry_delay
-            
             # Create a new connection
-            logger.info(f"Connecting to RabbitMQ at {self.config.uri} with heartbeat={self.config.heartbeat}s")
-            self.connection = pika.BlockingConnection(params)
+            logger.info(f"Connecting to RabbitMQ at {self.config.uri}")
+            parameters = pika.URLParameters(self.config.uri)
+            parameters.heartbeat = self.config.heartbeat
+            parameters.connection_attempts = self.config.connection_attempts
+            parameters.retry_delay = self.config.retry_delay
             
-            # Add connection close callback
+            # Add connection blocked/unblocked callbacks
+            self.connection = pika.BlockingConnection(parameters)
             self.connection.add_on_connection_blocked_callback(self._on_connection_blocked)
             self.connection.add_on_connection_unblocked_callback(self._on_connection_unblocked)
             
+            # Create a channel
             self.channel = self.connection.channel()
             
             # Declare the exchange
@@ -107,8 +107,10 @@ class EvolutionAPIClient:
             # Strategy 2: Try to also consume from the instance-specific queues that already exist
             # Based on the RabbitMQ management UI, these are the queues we should be listening to
             for event in self.config.events:
+                # Get the string value of the event enum
+                event_value = event.value if isinstance(event, EventType) else str(event)
                 # These are the exact queue names seen in RabbitMQ management UI
-                instance_queue_name = f"{self.config.instance_name}.{event}"
+                instance_queue_name = f"evolution.{event_value}"
                 
                 try:
                     # Declare queue if it doesn't exist (passive=False) or just get it if it does
@@ -131,8 +133,10 @@ class EvolutionAPIClient:
             
             # Try different binding patterns to increase chances of receiving messages
             for event in self.config.events:
+                # Get the string value of the event enum
+                event_value = event.value if isinstance(event, EventType) else str(event)
                 # Pattern 1: Standard instance.event pattern
-                routing_key = f"{self.config.instance_name}.{event}"
+                routing_key = f"evolution.{event_value}"
                 self.channel.queue_bind(
                     exchange=self.config.exchange_name,
                     queue=self.queue_name,
@@ -141,7 +145,7 @@ class EvolutionAPIClient:
                 logger.info(f"Bound queue to routing key: {routing_key}")
             
             # Pattern 2: All events for this instance
-            routing_key = f"{self.config.instance_name}.*"
+            routing_key = "evolution.*"
             self.channel.queue_bind(
                 exchange=self.config.exchange_name,
                 queue=self.queue_name,
